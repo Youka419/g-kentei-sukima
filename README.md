@@ -20,8 +20,9 @@ python -m pip install -r requirements.txt
 python -m streamlit run app.py
 ```
 
-## Streamlit Cloud への公開
+## 公開URL
 
-1. このフォルダのうち `app.py` / `requirements.txt` / `g_study/` / `.streamlit/` だけを GitHub に上げる（PDFは上げない）
-2. [share.streamlit.io](https://share.streamlit.io/) でそのリポジトリを選択
-3. Main file は `app.py`
+- ソース: https://github.com/Youka419/g-kentei-sukima
+- Streamlit Cloud（初回だけブラウザでDeployを押す）: https://share.streamlit.io/deploy?repository=Youka419/g-kentei-sukima&branch=main&mainModule=app.py
+
+公開後の想定アドレスは `https://g-kentei-sukima.streamlit.app` です。名前が取られていれば、Deploy画面で別のアプリ名になります。
