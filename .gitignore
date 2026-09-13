@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+_pdf_extract/
+data/
+*.pdf
+.streamlit/secrets.toml
+.venv/
+venv/
