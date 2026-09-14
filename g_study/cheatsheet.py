@@ -79,7 +79,8 @@ def load_excel_bytes(data: bytes) -> pd.DataFrame:
 
 def excel_bytes(df: pd.DataFrame) -> bytes:
     buf = BytesIO()
-    normalize(df).to_excel(buf, index=False, engine="openpyxl")
+    out = df.copy() if "不正解回数" in df.columns else normalize(df)
+    out.fillna("").to_excel(buf, index=False, engine="openpyxl")
     return buf.getvalue()
 
 
@@ -106,6 +107,41 @@ def already_has(df: pd.DataFrame, term: str, question: str = "") -> bool:
     return bool(same_term.any())
 
 
+def chronic_miss_frame(sheet: pd.DataFrame, progress: dict, min_count: int = 10) -> pd.DataFrame:
+    from .progress import chronic_misses
+
+    cols = [
+        "不正解回数",
+        "分野",
+        "章",
+        "節",
+        "用語",
+        "定義",
+        "試験ポイント",
+        "問題文",
+        "自分の解答",
+        "正解",
+        "メモ",
+    ]
+    rows = []
+    for item in chronic_misses(progress, min_count):
+        extra = {"問題文": "", "自分の解答": "", "正解": "", "メモ": ""}
+        if sheet is not None and not sheet.empty and "用語" in sheet.columns:
+            hit = sheet[sheet["用語"].astype(str) == str(item["用語"])]
+            if not hit.empty:
+                last = hit.iloc[-1]
+                extra = {
+                    "問題文": last.get("問題文", ""),
+                    "自分の解答": last.get("自分の解答", ""),
+                    "正解": last.get("正解", ""),
+                    "メモ": last.get("メモ", ""),
+                }
+        rows.append({**item, **extra})
+    if not rows:
+        return pd.DataFrame(columns=cols)
+    return pd.DataFrame(rows)[cols].fillna("")
+
+
 def _set_run_font(run, size: int = 11, bold: bool = False, color: tuple[int, int, int] | None = None) -> None:
     run.font.size = Pt(size)
     run.bold = bold
@@ -123,7 +159,9 @@ def _build_word(df: pd.DataFrame) -> Document:
 
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = title.add_run("G検定 弱点チートシート")
+    run = title.add_run(
+        "G検定 10回以上間違えた問題" if "不正解回数" in df.columns else "G検定 弱点チートシート"
+    )
     _set_run_font(run, 20, bold=True, color=(15, 61, 107))
 
     meta = doc.add_paragraph()
@@ -159,6 +197,10 @@ def _build_word(df: pd.DataFrame) -> Document:
                 run = p.add_run(f"　[{row['節']}]")
                 _set_run_font(run, 9, color=(100, 100, 100))
 
+            if row.get("不正解回数") not in ("", None):
+                d = doc.add_paragraph()
+                run = d.add_run(f"不正解回数: {row['不正解回数']}")
+                _set_run_font(run, 11, bold=True, color=(153, 0, 0))
             if row.get("定義"):
                 d = doc.add_paragraph()
                 run = d.add_run(f"定義: {row['定義']}")

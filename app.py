@@ -6,6 +6,7 @@ import streamlit as st
 from g_study.cheatsheet import (
     add_entry,
     already_has,
+    chronic_miss_frame,
     excel_bytes,
     load_excel,
     load_excel_bytes,
@@ -19,6 +20,7 @@ from g_study.progress import (
     daily_quiz_counts,
     load_progress,
     load_progress_bytes,
+    miss_counts,
     progress_bytes,
     record_card,
     record_quiz,
@@ -601,10 +603,13 @@ def page_sheet() -> None:
         st.success(f"{len(st.session_state.sheet)}件を読み込みました。")
 
     df = st.session_state.sheet
+    counts = miss_counts(st.session_state.progress)
     st.metric("件数", len(df))
     if not df.empty:
         show_cols = [c for c in ["章", "用語", "定義", "自分の解答", "正解", "復習フラグ"] if c in df.columns]
-        st.dataframe(df[show_cols], hide_index=True, width="stretch")
+        show = df[show_cols].copy()
+        show.insert(1, "不正解回数", df["用語"].astype(str).map(lambda t: int(counts.get(t, 0))))
+        st.dataframe(show, hide_index=True, width="stretch")
 
     d1, d2 = st.columns(2)
     d1.download_button(
@@ -621,6 +626,40 @@ def page_sheet() -> None:
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         width="stretch",
     )
+
+    st.subheader("10回以上間違えた問題")
+    chronic_df = chronic_miss_frame(df, st.session_state.progress, min_count=10)
+    n_chronic = len(chronic_df)
+    st.caption(f"クイズで10回以上不正解になった用語です。いま {n_chronic}件。")
+    if n_chronic:
+        st.dataframe(
+            chronic_df[["不正解回数", "章", "用語", "定義", "問題文", "自分の解答", "正解"]],
+            hide_index=True,
+            width="stretch",
+        )
+        c1, c2 = st.columns(2)
+        c1.download_button(
+            "10回以上をExcelで保存",
+            data=excel_bytes(chronic_df),
+            file_name="G検定_10回以上の弱点.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            width="stretch",
+            key="dl_chronic_xlsx",
+        )
+        c2.download_button(
+            "10回以上をWordで保存",
+            data=word_bytes(chronic_df),
+            file_name="G検定_10回以上の弱点.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            width="stretch",
+            key="dl_chronic_docx",
+        )
+        hard_terms = [str(x) for x in chronic_df["用語"].tolist() if str(x)]
+        if st.button("この問題だけ3問", width="stretch"):
+            start_quiz(min(3, len(hard_terms)), terms=hard_terms)
+            st.rerun()
+    else:
+        st.caption("まだ10回以上間違えた用語はありません。クイズを続けると、ここに溜まります。")
 
     if review := [str(x) for x in df["用語"].tolist() if str(x)]:
         st.subheader("弱点をクイズにする")

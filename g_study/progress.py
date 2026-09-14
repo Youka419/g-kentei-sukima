@@ -17,6 +17,7 @@ def _empty() -> dict:
         "quiz": {"answered": 0, "correct": 0, "history": []},
         "sessions": [],
         "card_history": [],
+        "misses": {},
         "updated": "",
     }
 
@@ -43,6 +44,15 @@ def _normalize(data: dict) -> dict:
     base.setdefault("unknown", [])
     base.setdefault("sessions", [])
     base.setdefault("card_history", [])
+    misses = {str(k): int(v) for k, v in dict(base.get("misses") or {}).items()}
+    hist_miss: Counter[str] = Counter()
+    for row in base.get("quiz", {}).get("history", []):
+        term = str(row.get("term") or "")
+        if term and not row.get("correct"):
+            hist_miss[term] += 1
+    for term, n in hist_miss.items():
+        misses[term] = max(int(misses.get(term, 0)), int(n))
+    base["misses"] = misses
     return base
 
 
@@ -120,6 +130,10 @@ def record_quiz(
         }
     )
     quiz["history"] = history[-400:]
+    if not correct and term:
+        misses = data.setdefault("misses", {})
+        misses[term] = int(misses.get(term, 0)) + 1
+        data["misses"] = misses
     return data
 
 
@@ -227,6 +241,30 @@ def weak_terms_from_history(data: dict, limit: int = 20) -> list[dict]:
                 "正解": hits.get(term, 0),
                 "章": _chapter_of(term),
                 "最終": last_at.get(term, ""),
+            }
+        )
+    return ranked
+
+
+def miss_counts(data: dict) -> dict[str, int]:
+    return {str(k): int(v) for k, v in dict(data.get("misses") or {}).items() if int(v) > 0}
+
+
+def chronic_misses(data: dict, min_count: int = 10) -> list[dict]:
+    ranked = []
+    for term, n in sorted(miss_counts(data).items(), key=lambda x: (-x[1], x[0])):
+        if n < min_count:
+            continue
+        found = find_term(term) or {}
+        ranked.append(
+            {
+                "用語": term,
+                "不正解回数": n,
+                "章": found.get("chapter") or _chapter_of(term),
+                "節": found.get("section", ""),
+                "分野": found.get("field", ""),
+                "定義": found.get("definition", ""),
+                "試験ポイント": found.get("exam_point", ""),
             }
         )
     return ranked
