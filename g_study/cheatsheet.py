@@ -3,12 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
-from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml.ns import qn
-from docx.shared import Pt, RGBColor
 
 from .config import DATA_DIR, EXCEL_COLUMNS, EXCEL_PATH, WORD_PATH
 from .runtime import disk_writable
@@ -142,7 +139,16 @@ def chronic_miss_frame(sheet: pd.DataFrame, progress: dict, min_count: int = 10)
     return pd.DataFrame(rows)[cols].fillna("")
 
 
-def _set_run_font(run, size: int = 11, bold: bool = False, color: tuple[int, int, int] | None = None) -> None:
+def _docx_api() -> Any:
+    from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+    from docx.shared import Pt, RGBColor
+
+    return Document, WD_ALIGN_PARAGRAPH, qn, Pt, RGBColor
+
+
+def _set_run_font(run, Pt, qn, RGBColor, size: int = 11, bold: bool = False, color: tuple[int, int, int] | None = None) -> None:
     run.font.size = Pt(size)
     run.bold = bold
     run.font.name = "Yu Gothic"
@@ -151,7 +157,8 @@ def _set_run_font(run, size: int = 11, bold: bool = False, color: tuple[int, int
         run.font.color.rgb = RGBColor(*color)
 
 
-def _build_word(df: pd.DataFrame) -> Document:
+def _build_word(df: pd.DataFrame) -> Any:
+    Document, WD_ALIGN_PARAGRAPH, qn, Pt, RGBColor = _docx_api()
     doc = Document()
     section = doc.sections[0]
     section.top_margin = section.bottom_margin = Pt(54)
@@ -162,70 +169,73 @@ def _build_word(df: pd.DataFrame) -> Document:
     run = title.add_run(
         "G検定 10回以上間違えた問題" if "不正解回数" in df.columns else "G検定 弱点チートシート"
     )
-    _set_run_font(run, 20, bold=True, color=(15, 61, 107))
+    _set_run_font(run, Pt, qn, RGBColor, 20, bold=True, color=(15, 61, 107))
 
     meta = doc.add_paragraph()
     meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = meta.add_run(
         f"更新: {datetime.now().strftime('%Y-%m-%d %H:%M')}　／　件数: {len(df)}　／　Excelから自動生成"
     )
-    _set_run_font(run, 9, color=(90, 90, 90))
+    _set_run_font(run, Pt, qn, RGBColor, 9, color=(90, 90, 90))
 
     note = doc.add_paragraph()
     run = note.add_run(
         "間違えた問題や覚えたい用語をExcelで管理し、このWordに書き出しています。"
         "公式シラバス（G2024#6〜）の章立てで並べています。"
     )
-    _set_run_font(run, 10)
+    _set_run_font(run, Pt, qn, RGBColor, 10)
+
+    def font(run, size=11, bold=False, color=None):
+        _set_run_font(run, Pt, qn, RGBColor, size, bold, color)
 
     if df.empty:
         p = doc.add_paragraph()
         run = p.add_run("まだ項目がありません。アプリのクイズや手動追加から登録してください。")
-        _set_run_font(run, 11)
+        font(run, 11)
         return doc
 
     grouped = df.fillna("")
     for chapter, g1 in grouped.groupby("章", sort=False):
         heading = doc.add_paragraph()
         run = heading.add_run(str(chapter) if chapter else "未分類")
-        _set_run_font(run, 14, bold=True, color=(15, 61, 107))
+        font(run, 14, bold=True, color=(15, 61, 107))
         for _, row in g1.iterrows():
             p = doc.add_paragraph()
             run = p.add_run(f"■ {row['用語']}")
-            _set_run_font(run, 12, bold=True)
+            font(run, 12, bold=True)
             if row.get("節"):
                 run = p.add_run(f"　[{row['節']}]")
-                _set_run_font(run, 9, color=(100, 100, 100))
+                font(run, 9, color=(100, 100, 100))
 
             if row.get("不正解回数") not in ("", None):
                 d = doc.add_paragraph()
                 run = d.add_run(f"不正解回数: {row['不正解回数']}")
-                _set_run_font(run, 11, bold=True, color=(153, 0, 0))
+                font(run, 11, bold=True, color=(153, 0, 0))
             if row.get("定義"):
                 d = doc.add_paragraph()
                 run = d.add_run(f"定義: {row['定義']}")
-                _set_run_font(run, 11)
+                font(run, 11)
             if row.get("試験ポイント"):
                 d = doc.add_paragraph()
                 run = d.add_run(f"試験: {row['試験ポイント']}")
-                _set_run_font(run, 10, color=(40, 40, 40))
+                font(run, 10, color=(40, 40, 40))
             if row.get("問題文"):
                 d = doc.add_paragraph()
                 run = d.add_run(f"問題: {row['問題文']}")
-                _set_run_font(run, 10)
+                font(run, 10)
             if row.get("自分の解答") or row.get("正解"):
                 d = doc.add_paragraph()
                 run = d.add_run(f"自分の解答: {row.get('自分の解答', '')}　／　正解: {row.get('正解', '')}")
-                _set_run_font(run, 10, color=(153, 0, 0))
+                font(run, 10, color=(153, 0, 0))
             if row.get("メモ"):
                 d = doc.add_paragraph()
                 run = d.add_run(f"メモ: {row['メモ']}")
-                _set_run_font(run, 10)
+                font(run, 10)
             flag = row.get("復習フラグ", "")
             if flag:
                 d = doc.add_paragraph()
                 run = d.add_run(f"フラグ: {flag}")
-                _set_run_font(run, 9, color=(15, 61, 107))
+                font(run, 9, color=(15, 61, 107))
     return doc
 
 
