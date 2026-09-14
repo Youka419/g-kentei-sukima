@@ -14,9 +14,20 @@ from g_study.cheatsheet import (
 )
 from g_study.config import EXCEL_PATH, OFFICIAL_URL, SYLLABUS_URL, TICKET_URL, WORD_PATH
 from g_study.exam import EXAM_OVERVIEW, FEES, NEXT_ONLINE, NEXT_ONSITE_NOTE, NOTES_2026, SCHEDULE_2026, SYLLABUS_TREE
-from g_study.progress import load_progress, mark_card, record_quiz, save_progress
+from g_study.progress import (
+    chapter_stats,
+    daily_quiz_counts,
+    load_progress,
+    load_progress_bytes,
+    progress_bytes,
+    record_card,
+    record_quiz,
+    record_session,
+    save_progress,
+    weak_terms_from_history,
+)
 from g_study.quiz import QUIZ_PRESETS, make_quiz
-from g_study.runtime import disk_writable, is_cloud
+from g_study.runtime import is_cloud
 from g_study.terms import all_terms, filter_terms
 
 st.set_page_config(
@@ -72,6 +83,9 @@ def _init_state() -> None:
     st.session_state.setdefault("quiz_field", None)
     st.session_state.setdefault("quiz_terms", None)
     st.session_state.setdefault("mode", None)
+    st.session_state.setdefault("session_answered", 0)
+    st.session_state.setdefault("session_correct", 0)
+    st.session_state.setdefault("session_recorded", False)
 
 
 def persist_sheet(df: pd.DataFrame) -> None:
@@ -80,8 +94,7 @@ def persist_sheet(df: pd.DataFrame) -> None:
 
 
 def persist_progress() -> None:
-    if disk_writable(EXCEL_PATH.parent):
-        save_progress(st.session_state.progress)
+    save_progress(st.session_state.progress)
 
 
 def chapter_count(chapter: str) -> int:
@@ -99,6 +112,9 @@ def start_quiz(n: int, chapter: str | None = None, field: str | None = None, ter
     st.session_state.last_result = None
     st.session_state.nav = "クイズ"
     st.session_state.mode = "quiz"
+    st.session_state.session_answered = 0
+    st.session_state.session_correct = 0
+    st.session_state.session_recorded = False
 
 
 def start_cards(chapter: str) -> None:
@@ -110,7 +126,7 @@ def start_cards(chapter: str) -> None:
 
 
 def nav_bar() -> str:
-    options = ["章から学ぶ", "用語カード", "クイズ", "弱点", "試験情報"]
+    options = ["章から学ぶ", "用語カード", "クイズ", "弱点", "履歴", "試験情報"]
     current = st.session_state.nav if st.session_state.nav in options else "章から学ぶ"
     picked = st.radio("メニュー", options, index=options.index(current), horizontal=True, label_visibility="collapsed")
     st.session_state.nav = picked
@@ -129,6 +145,7 @@ def page_chapters() -> None:
     m1.metric("正答率", rate)
     m2.metric("弱点", f"{len(st.session_state.sheet)}件")
     m3.metric("用語", f"{len(all_terms())}")
+    stats_map = {r["章"]: r for r in chapter_stats(st.session_state.progress)}
 
     st.subheader("弱点だけ解く")
     weak_terms = [str(x) for x in st.session_state.sheet["用語"].tolist() if str(x)]
@@ -151,7 +168,11 @@ def page_chapters() -> None:
             if count == 0:
                 continue
             with st.container(border=True):
-                st.markdown(f"**{chapter}**　`{count}語`")
+                ch_stat = stats_map.get(chapter, {})
+                done = ch_stat.get("クイズ解答", 0)
+                rate = ch_stat.get("正答率")
+                extra = f"　解答{done}" + (f"　正答率{rate}%" if rate is not None else "")
+                st.markdown(f"**{chapter}**　`{count}語`{extra}")
                 st.caption(" / ".join(sections[:4]) + (" …" if len(sections) > 4 else ""))
                 bcols = st.columns(len(QUIZ_PRESETS) + 1)
                 if bcols[0].button("カード", width="stretch", key=f"card_{chapter}"):
@@ -205,7 +226,9 @@ def page_cards() -> None:
         st.session_state.show_answer = False
         st.rerun()
     if c2.button("要復習", width="stretch"):
-        st.session_state.progress = mark_card(st.session_state.progress, item["term"], False)
+        st.session_state.progress = record_card(
+            st.session_state.progress, item["term"], False, item["chapter"], item["field"]
+        )
         persist_progress()
         if not already_has(st.session_state.sheet, item["term"]):
             persist_sheet(
@@ -225,7 +248,9 @@ def page_cards() -> None:
             )
         st.rerun()
     if c3.button("次へ →", width="stretch"):
-        st.session_state.progress = mark_card(st.session_state.progress, item["term"], True)
+        st.session_state.progress = record_card(
+            st.session_state.progress, item["term"], True, item["chapter"], item["field"]
+        )
         persist_progress()
         st.session_state.card_idx = min(st.session_state.card_idx + 1, len(items) - 1)
         st.session_state.show_answer = False
@@ -263,8 +288,26 @@ def page_quiz() -> None:
     st.progress(1.0 if st.session_state.q_done else idx / total, text=f"{min(idx + 1, total)} / {total}")
 
     if st.session_state.q_done:
+        if not st.session_state.session_recorded:
+            st.session_state.progress = record_session(
+                st.session_state.progress,
+                st.session_state.quiz_chapter,
+                st.session_state.quiz_n,
+                st.session_state.session_answered,
+                st.session_state.session_correct,
+            )
+            persist_progress()
+            st.session_state.session_recorded = True
         hist = st.session_state.progress["quiz"]
-        st.success(f"終了。通算 {hist['correct']} / {hist['answered']} 問正解")
+        sess_a = st.session_state.session_answered
+        sess_c = st.session_state.session_correct
+        if sess_a:
+            st.success(f"今回 {sess_c} / {sess_a} 問正解　／　通算 {hist['correct']} / {hist['answered']}")
+        else:
+            st.success(f"終了。通算 {hist['correct']} / {hist['answered']} 問正解")
+        if st.button("履歴を見る", width="stretch"):
+            st.session_state.nav = "履歴"
+            st.rerun()
         again = st.columns(len(QUIZ_PRESETS))
         for col, preset in zip(again, QUIZ_PRESETS):
             if col.button(f"もう{preset['label']}", width="stretch", key=f"again_{preset['n']}"):
@@ -290,10 +333,22 @@ def page_quiz() -> None:
         if st.button("解答する", type="primary", width="stretch"):
             ok = choice == q["answer"]
             st.session_state.last_result = {"ok": ok, "choice": choice}
-            st.session_state.progress = record_quiz(st.session_state.progress, ok, q["term"])
+            st.session_state.progress = record_quiz(
+                st.session_state.progress,
+                ok,
+                q["term"],
+                chapter=q.get("chapter", ""),
+                field=q.get("field", ""),
+                section=q.get("section", ""),
+            )
+            st.session_state.session_answered += 1
+            if ok:
+                st.session_state.session_correct += 1
             persist_progress()
             if not ok:
-                st.session_state.progress = mark_card(st.session_state.progress, q["term"], False)
+                st.session_state.progress = record_card(
+                    st.session_state.progress, q["term"], False, q.get("chapter", ""), q.get("field", "")
+                )
                 persist_progress()
             st.rerun()
         return
@@ -335,6 +390,93 @@ def page_quiz() -> None:
         else:
             st.session_state.q_idx += 1
         st.rerun()
+
+
+def page_history() -> None:
+    st.title("学習履歴")
+    p = st.session_state.progress
+    quiz = p.get("quiz", {})
+    answered = int(quiz.get("answered", 0))
+    correct = int(quiz.get("correct", 0))
+    sessions = p.get("sessions", [])
+    known_n = len(p.get("known", []))
+    unknown_n = len(p.get("unknown", []))
+    rate = f"{(correct / answered * 100):.0f}%" if answered else "—"
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("通算正答率", rate)
+    c2.metric("解答数", answered)
+    c3.metric("実施セット", len(sessions))
+    c4.metric("要復習", unknown_n)
+
+    if p.get("updated"):
+        st.caption(f"最終更新: {p['updated']}　／　カード既知 {known_n}語")
+    if is_cloud():
+        st.info("公開版は再起動で消えることがあります。下のJSONを保存しておくと、学習履歴を戻せます。")
+
+    daily = daily_quiz_counts(p)
+    if daily:
+        st.subheader("日別の解答数")
+        st.bar_chart(pd.Series(daily, name="解答数"), width="stretch")
+
+    if sessions:
+        st.subheader("最近のクイズ")
+        sess_df = pd.DataFrame(list(reversed(sessions[-30:])))
+        sess_df = sess_df.rename(
+            columns={"at": "日時", "chapter": "章", "n": "出題", "answered": "解答", "correct": "正解"}
+        )
+        if "正解" in sess_df.columns and "解答" in sess_df.columns:
+            sess_df["正答率"] = [
+                f"{round(100 * c / a)}%" if a else "—" for c, a in zip(sess_df["正解"], sess_df["解答"])
+            ]
+        st.dataframe(sess_df, hide_index=True, width="stretch")
+
+    st.subheader("章ごとの進み")
+    ch_df = pd.DataFrame(chapter_stats(p))
+    if not ch_df.empty:
+        show = ch_df.copy()
+        show["正答率"] = show["正答率"].map(lambda x: f"{x}%" if x is not None else "—")
+        st.dataframe(show, hide_index=True, width="stretch")
+
+    weak = weak_terms_from_history(p)
+    if weak:
+        st.subheader("よく間違える用語")
+        st.dataframe(pd.DataFrame(weak), hide_index=True, width="stretch")
+        terms = [row["用語"] for row in weak]
+        if st.button("この弱点だけ3問", width="stretch"):
+            start_quiz(min(3, len(terms)), terms=terms)
+            st.rerun()
+
+    hist_rows = list(reversed(quiz.get("history", [])[-80:]))
+    if hist_rows:
+        st.subheader("直近の解答")
+        qdf = pd.DataFrame(hist_rows)
+        if "correct" in qdf.columns:
+            qdf["結果"] = ["○" if bool(x) else "×" for x in qdf["correct"]]
+        keep = [c for c in ["at", "結果", "term", "chapter"] if c in qdf.columns]
+        qdf = qdf[keep].rename(columns={"at": "日時", "term": "用語", "chapter": "章"})
+        st.dataframe(qdf, hide_index=True, width="stretch")
+    elif not answered:
+        st.caption("まだ履歴がありません。章クイズかカードを進めると、ここに溜まります。")
+
+    st.subheader("履歴の保存")
+    u1, u2 = st.columns(2)
+    u1.download_button(
+        "履歴JSONを保存",
+        data=progress_bytes(p),
+        file_name="G検定_学習履歴.json",
+        mime="application/json",
+        width="stretch",
+    )
+    uploaded = u2.file_uploader("履歴JSONを読み込む", type=["json"])
+    if uploaded is not None:
+        marker = f"{uploaded.name}:{uploaded.size}"
+        if st.session_state.get("_hist_loaded") != marker:
+            st.session_state.progress = load_progress_bytes(uploaded.getvalue())
+            persist_progress()
+            st.session_state._hist_loaded = marker
+            st.success("学習履歴を読み込みました。")
+            st.rerun()
 
 
 def page_sheet() -> None:
@@ -413,6 +555,8 @@ def main() -> None:
         page_quiz()
     elif page == "弱点":
         page_sheet()
+    elif page == "履歴":
+        page_history()
     else:
         page_exam()
 

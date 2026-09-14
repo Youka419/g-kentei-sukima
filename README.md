@@ -9,9 +9,10 @@
 1. 上のメニューで「章から学ぶ」
 2. 章のカードで **3問 / 5問 / 10問 / 15問** をタップ
 3. 間違えたら「弱点ノートに追加」
-4. 「弱点」タブから Excel / Word を端末に保存
+4. 「履歴」で正答率・章ごとの進み・直近の解答を確認
+5. 「弱点」タブから Excel / Word を端末に保存
 
-公開版はサーバー上にファイルが残りません。外出先で追加したら、その場でダウンロードしてください。次に使うときは「以前のExcelを読み込む」で続きからできます。
+公開版はサーバー上にファイルが残りません。外出先で追加したら、その場でダウンロードしてください。履歴は **履歴JSON**、弱点は Excel です。次に使うときはそれぞれ読み込んで続きからできます。
 
 ## ローカル起動
 
@@ -22,7 +23,5 @@ python -m streamlit run app.py
 
 ## 公開URL
 
+- スマホ用アプリ: https://youka419-g-kentei-sukima-app-t3rjke.streamlit.app/
 - ソース: https://github.com/Youka419/g-kentei-sukima
-- Streamlit Cloud（初回だけブラウザでDeployを押す）: https://share.streamlit.io/deploy?repository=Youka419/g-kentei-sukima&branch=main&mainModule=app.py
-
-公開後の想定アドレスは `https://g-kentei-sukima.streamlit.app` です。名前が取られていれば、Deploy画面で別のアプリ名になります。
