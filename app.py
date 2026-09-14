@@ -28,7 +28,7 @@ from g_study.progress import (
 )
 from g_study.quiz import QUIZ_PRESETS, make_quiz
 from g_study.runtime import is_cloud
-from g_study.terms import all_terms, filter_terms
+from g_study.terms import all_terms, filter_terms, sections_for
 
 st.set_page_config(
     page_title="G検定 スキマ学習",
@@ -117,16 +117,29 @@ def start_quiz(n: int, chapter: str | None = None, field: str | None = None, ter
     st.session_state.session_recorded = False
 
 
-def start_cards(chapter: str) -> None:
+def start_cards(chapter: str, term: str | None = None) -> None:
     st.session_state.chapter = chapter
-    st.session_state.card_idx = 0
-    st.session_state.show_answer = False
+    items = filter_terms(chapter=chapter)
+    if term:
+        names = [t["term"] for t in items]
+        st.session_state.card_idx = names.index(term) if term in names else 0
+        st.session_state.show_answer = True
+    else:
+        st.session_state.card_idx = 0
+        st.session_state.show_answer = False
     st.session_state.nav = "用語カード"
     st.session_state.mode = "cards"
 
 
+def start_glossary(chapter: str | None = None) -> None:
+    st.session_state.chapter = chapter
+    st.session_state.nav = "用語集"
+    st.session_state.mode = "glossary"
+    st.session_state.glossary_query = ""
+
+
 def nav_bar() -> str:
-    options = ["章から学ぶ", "用語カード", "クイズ", "弱点", "履歴", "試験情報"]
+    options = ["章から学ぶ", "用語カード", "クイズ", "弱点", "履歴", "用語集", "試験情報"]
     current = st.session_state.nav if st.session_state.nav in options else "章から学ぶ"
     picked = st.radio("メニュー", options, index=options.index(current), horizontal=True, label_visibility="collapsed")
     st.session_state.nav = picked
@@ -183,6 +196,16 @@ def page_chapters() -> None:
                     if col.button(f"{preset['label']}", width="stretch", key=f"q_{chapter}_{preset['n']}"):
                         start_quiz(n, chapter=chapter, field=field)
                         st.rerun()
+                if st.button("この章の用語集", width="stretch", key=f"gloss_{chapter}"):
+                    start_glossary(chapter)
+                    st.rerun()
+
+    st.divider()
+    st.subheader("用語集")
+    st.caption("定義をまとめて見たいときは、ここか各章の下から開けます。")
+    if st.button("用語集を見る（全章）", type="primary", width="stretch"):
+        start_glossary(None)
+        st.rerun()
 
 
 def page_cards() -> None:
@@ -263,6 +286,91 @@ def page_cards() -> None:
         n = min(preset["n"], len(items))
         if col.button(f"{preset['label']}\n{preset['hint']}", width="stretch", key=f"cardquiz_{preset['n']}"):
             start_quiz(n, chapter=chapter)
+            st.rerun()
+    st.divider()
+    if st.button("この章の用語集", width="stretch"):
+        start_glossary(chapter)
+        st.rerun()
+
+
+def page_glossary() -> None:
+    st.title("用語集")
+    st.caption("公式シラバスのキーワードを、章・節ごとに一覧できます。")
+    chapter_names = ["すべて"] + [c for chapters_map in SYLLABUS_TREE.values() for c in chapters_map]
+    selected = st.session_state.chapter if st.session_state.chapter in chapter_names else "すべて"
+    if selected is None:
+        selected = "すべて"
+    chapter = st.selectbox("章", chapter_names, index=chapter_names.index(selected))
+    st.session_state.chapter = None if chapter == "すべて" else chapter
+    query = st.text_input("検索", placeholder="用語・定義で探す")
+    ch = None if chapter == "すべて" else chapter
+    items = filter_terms(chapter=ch, query=query)
+    st.write(f"**{len(items)}語**")
+    if not items:
+        st.warning("該当する用語がありません。")
+        return
+
+    known = set(st.session_state.progress.get("known", []))
+    unknown = set(st.session_state.progress.get("unknown", []))
+
+    def _mark(name: str) -> str:
+        if name in unknown:
+            return "　要復習"
+        if name in known:
+            return "　既知"
+        return ""
+
+    chapter_order = [c for chapters_map in SYLLABUS_TREE.values() for c in chapters_map]
+    if ch:
+        chapter_order = [ch]
+    for ch_name in chapter_order:
+        ch_items = [t for t in items if t["chapter"] == ch_name]
+        if not ch_items:
+            continue
+        if not ch:
+            st.markdown(f"## {ch_name}")
+        for section in sections_for(ch_name):
+            rows = [t for t in ch_items if t["section"] == section]
+            if not rows:
+                continue
+            st.markdown(f"### {section}")
+            for t in rows:
+                with st.expander(f"{t['term']}{_mark(t['term'])}"):
+                    st.write(t["definition"])
+                    st.write(f"**試験ポイント**　{t['exam_point']}")
+                    b1, b2 = st.columns(2)
+                    if b1.button("カードで見る", width="stretch", key=f"gcard_{t['term']}"):
+                        start_cards(t["chapter"], t["term"])
+                        st.rerun()
+                    if b2.button("弱点に追加", width="stretch", key=f"gweak_{t['term']}"):
+                        st.session_state.progress = record_card(
+                            st.session_state.progress, t["term"], False, t["chapter"], t["field"]
+                        )
+                        persist_progress()
+                        if not already_has(st.session_state.sheet, t["term"]):
+                            persist_sheet(
+                                add_entry(
+                                    st.session_state.sheet,
+                                    {
+                                        "用語": t["term"],
+                                        "定義": t["definition"],
+                                        "試験ポイント": t["exam_point"],
+                                        "分野": t["field"],
+                                        "章": t["chapter"],
+                                        "節": t["section"],
+                                        "メモ": "用語集から追加",
+                                        "復習フラグ": "要復習",
+                                    },
+                                )
+                            )
+                        st.success("弱点ノートに追加しました。")
+
+    st.divider()
+    qcols = st.columns(len(QUIZ_PRESETS))
+    for col, preset in zip(qcols, QUIZ_PRESETS):
+        n = min(preset["n"], len(items)) if items else preset["n"]
+        if col.button(f"{preset['label']}", width="stretch", key=f"glossquiz_{preset['n']}"):
+            start_quiz(n, chapter=ch)
             st.rerun()
 
 
@@ -557,6 +665,8 @@ def main() -> None:
         page_sheet()
     elif page == "履歴":
         page_history()
+    elif page == "用語集":
+        page_glossary()
     else:
         page_exam()
 
