@@ -479,8 +479,10 @@ def page_quiz() -> None:
         st.success(f"正解　{q['answer']}")
     else:
         st.error(f"不正解　あなたの解答: {result['choice']}")
-        st.info(f"正解: {q['answer']}\n\n{q['definition']}")
-        st.caption(q["exam_point"])
+        st.write(f"**正解**　{q['answer']}")
+    st.info(q["definition"])
+    st.caption(f"試験ポイント　{q['exam_point']}")
+    if not result["ok"]:
         if already_has(st.session_state.sheet, q["term"], q["stem"]):
             st.caption("この問題はすでに弱点ノートにあります。")
         elif st.button("弱点ノートに追加", type="primary", width="stretch"):
