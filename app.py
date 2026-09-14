@@ -140,10 +140,15 @@ def start_glossary(chapter: str | None = None) -> None:
     st.session_state.glossary_query = ""
 
 
+def start_history() -> None:
+    st.session_state.nav = "学習履歴"
+    st.session_state.mode = "history"
+
+
 def nav_bar() -> str:
-    options = ["章から学ぶ", "用語カード", "クイズ", "弱点", "履歴", "用語集", "試験情報"]
+    options = ["章から学ぶ", "用語カード", "クイズ", "弱点", "学習履歴", "用語集", "試験情報"]
     current = st.session_state.nav if st.session_state.nav in options else "章から学ぶ"
-    picked = st.radio("メニュー", options, index=options.index(current), horizontal=True, label_visibility="collapsed")
+    picked = st.selectbox("画面", options, index=options.index(current))
     st.session_state.nav = picked
     return picked
 
@@ -160,6 +165,9 @@ def page_chapters() -> None:
     m1.metric("正答率", rate)
     m2.metric("弱点", f"{len(st.session_state.sheet)}件")
     m3.metric("用語", f"{len(all_terms())}")
+    if st.button("学習履歴を見る", type="primary", width="stretch"):
+        start_history()
+        st.rerun()
     stats_map = {r["章"]: r for r in chapter_stats(st.session_state.progress)}
 
     st.subheader("弱点だけ解く")
@@ -203,9 +211,12 @@ def page_chapters() -> None:
                     st.rerun()
 
     st.divider()
-    st.subheader("用語集")
-    st.caption("定義をまとめて見たいときは、ここか各章の下から開けます。")
-    if st.button("用語集を見る（全章）", type="primary", width="stretch"):
+    st.subheader("学習履歴・用語集")
+    h1, h2 = st.columns(2)
+    if h1.button("学習履歴を見る", width="stretch", key="hist_bottom"):
+        start_history()
+        st.rerun()
+    if h2.button("用語集を見る（全章）", width="stretch", key="gloss_bottom"):
         start_glossary(None)
         st.rerun()
 
@@ -416,7 +427,7 @@ def page_quiz() -> None:
         else:
             st.success(f"終了。通算 {hist['correct']} / {hist['answered']} 問正解")
         if st.button("履歴を見る", width="stretch"):
-            st.session_state.nav = "履歴"
+            st.session_state.nav = "学習履歴"
             st.rerun()
         again = st.columns(len(QUIZ_PRESETS))
         for col, preset in zip(again, QUIZ_PRESETS):
@@ -661,6 +672,10 @@ def page_sheet() -> None:
     else:
         st.caption("まだ10回以上間違えた用語はありません。クイズを続けると、ここに溜まります。")
 
+    if st.button("学習履歴を見る", width="stretch", key="sheet_to_hist"):
+        start_history()
+        st.rerun()
+
     if review := [str(x) for x in df["用語"].tolist() if str(x)]:
         st.subheader("弱点をクイズにする")
         cols = st.columns(len(QUIZ_PRESETS))
@@ -702,7 +717,7 @@ def main() -> None:
         page_quiz()
     elif page == "弱点":
         page_sheet()
-    elif page == "履歴":
+    elif page == "学習履歴":
         page_history()
     elif page == "用語集":
         page_glossary()
