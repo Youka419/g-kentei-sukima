@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .config import DATA_DIR, PROGRESS_PATH
 from .runtime import disk_writable
-from .terms import all_terms, chapters, find_term
+from .terms import all_terms, chapters, filter_terms, find_term
 
 
 def _empty() -> dict:
@@ -18,6 +18,7 @@ def _empty() -> dict:
         "sessions": [],
         "card_history": [],
         "misses": {},
+        "answered_terms": [],
         "updated": "",
     }
 
@@ -53,6 +54,12 @@ def _normalize(data: dict) -> dict:
     for term, n in hist_miss.items():
         misses[term] = max(int(misses.get(term, 0)), int(n))
     base["misses"] = misses
+    answered = {str(x) for x in (base.get("answered_terms") or []) if str(x)}
+    for row in base.get("quiz", {}).get("history", []):
+        term = str(row.get("term") or "")
+        if term:
+            answered.add(term)
+    base["answered_terms"] = sorted(answered)
     return base
 
 
@@ -130,6 +137,10 @@ def record_quiz(
         }
     )
     quiz["history"] = history[-400:]
+    if term:
+        seen = set(data.get("answered_terms") or [])
+        seen.add(term)
+        data["answered_terms"] = sorted(seen)
     if not correct and term:
         misses = data.setdefault("misses", {})
         misses[term] = int(misses.get(term, 0)) + 1
@@ -268,3 +279,12 @@ def chronic_misses(data: dict, min_count: int = 10) -> list[dict]:
             }
         )
     return ranked
+
+
+def answered_term_set(data: dict) -> set[str]:
+    return {str(x) for x in (data.get("answered_terms") or []) if str(x)}
+
+
+def unanswered_terms(data: dict, chapter: str | None = None, field: str | None = None) -> list[str]:
+    seen = answered_term_set(data)
+    return [t["term"] for t in filter_terms(field=field, chapter=chapter) if t["term"] not in seen]

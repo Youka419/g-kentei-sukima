@@ -54,13 +54,16 @@ def make_quiz(
     field: str | None = None,
     terms: list[str] | None = None,
 ) -> list[dict]:
-    if terms:
+    explicit = terms is not None
+    if explicit:
         wanted = set(terms)
         pool = [t for t in all_terms() if t["term"] in wanted]
+        if not pool:
+            return []
     else:
         pool = filter_terms(field=field, chapter=chapter)
-    if len(pool) < 2:
-        pool = all_terms()
+        if len(pool) < 2:
+            pool = all_terms()
     count = min(max(1, n), len(pool))
     used: set[str] = set()
     questions = []

@@ -26,6 +26,7 @@ from g_study.progress import (
     record_quiz,
     record_session,
     save_progress,
+    unanswered_terms,
     weak_terms_from_history,
 )
 from g_study.quiz import QUIZ_PRESETS, make_quiz
@@ -84,6 +85,7 @@ def _init_state() -> None:
     st.session_state.setdefault("quiz_chapter", None)
     st.session_state.setdefault("quiz_field", None)
     st.session_state.setdefault("quiz_terms", None)
+    st.session_state.setdefault("quiz_unseen", False)
     st.session_state.setdefault("mode", None)
     st.session_state.setdefault("session_answered", 0)
     st.session_state.setdefault("session_correct", 0)
@@ -103,12 +105,22 @@ def chapter_count(chapter: str) -> int:
     return len(filter_terms(chapter=chapter))
 
 
-def start_quiz(n: int, chapter: str | None = None, field: str | None = None, terms: list[str] | None = None) -> None:
+def start_quiz(
+    n: int,
+    chapter: str | None = None,
+    field: str | None = None,
+    terms: list[str] | None = None,
+    unseen_only: bool = False,
+) -> bool:
+    quiz = make_quiz(n=n, chapter=chapter, field=field, terms=terms)
+    if not quiz:
+        return False
     st.session_state.quiz_n = n
     st.session_state.quiz_chapter = chapter
     st.session_state.quiz_field = field
     st.session_state.quiz_terms = terms
-    st.session_state.quiz = make_quiz(n=n, chapter=chapter, field=field, terms=terms)
+    st.session_state.quiz_unseen = unseen_only
+    st.session_state.quiz = quiz
     st.session_state.q_idx = 0
     st.session_state.q_done = False
     st.session_state.last_result = None
@@ -117,6 +129,25 @@ def start_quiz(n: int, chapter: str | None = None, field: str | None = None, ter
     st.session_state.session_answered = 0
     st.session_state.session_correct = 0
     st.session_state.session_recorded = False
+    return True
+
+
+def launch_quiz(
+    n: int,
+    chapter: str | None = None,
+    field: str | None = None,
+    terms: list[str] | None = None,
+    unseen_only: bool = False,
+) -> None:
+    if unseen_only and terms is None:
+        terms = unanswered_terms(st.session_state.progress, chapter=chapter, field=field)
+        if not terms:
+            st.warning("この範囲はすべて解答済みです。チェックを外すと再出題できます。")
+            return
+    if not start_quiz(n, chapter=chapter, field=field, terms=terms, unseen_only=unseen_only):
+        st.warning("出題できる用語がありません。")
+        return
+    st.rerun()
 
 
 def start_cards(chapter: str, term: str | None = None) -> None:
@@ -195,17 +226,24 @@ def page_chapters() -> None:
                 done = ch_stat.get("クイズ解答", 0)
                 rate = ch_stat.get("正答率")
                 extra = f"　解答{done}" + (f"　正答率{rate}%" if rate is not None else "")
-                st.markdown(f"**{chapter}**　`{count}語`{extra}")
+                left = unanswered_terms(st.session_state.progress, chapter=chapter, field=field)
+                st.markdown(f"**{chapter}**　`{count}語`　未解答`{len(left)}`{extra}")
                 st.caption(" / ".join(sections[:4]) + (" …" if len(sections) > 4 else ""))
+                unseen = st.checkbox(
+                    f"未解答だけ（残り{len(left)}語）",
+                    key=f"unseen_{chapter}",
+                )
                 bcols = st.columns(len(QUIZ_PRESETS) + 1)
                 if bcols[0].button("カード", width="stretch", key=f"card_{chapter}"):
                     start_cards(chapter)
                     st.rerun()
                 for col, preset in zip(bcols[1:], QUIZ_PRESETS):
-                    n = min(preset["n"], count)
+                    n = min(preset["n"], len(left) if unseen else count)
+                    if n <= 0:
+                        col.button(f"{preset['label']}", width="stretch", key=f"q_{chapter}_{preset['n']}", disabled=True)
+                        continue
                     if col.button(f"{preset['label']}", width="stretch", key=f"q_{chapter}_{preset['n']}"):
-                        start_quiz(n, chapter=chapter, field=field)
-                        st.rerun()
+                        launch_quiz(n, chapter=chapter, field=field, unseen_only=unseen)
                 if st.button("この章の用語集", width="stretch", key=f"gloss_{chapter}"):
                     start_glossary(chapter)
                     st.rerun()
@@ -294,12 +332,17 @@ def page_cards() -> None:
 
     st.divider()
     st.caption("この章をクイズで確認")
+    left = unanswered_terms(st.session_state.progress, chapter=chapter)
+    unseen = st.checkbox(f"未解答だけ（残り{len(left)}語）", key=f"card_unseen_{chapter}")
     qcols = st.columns(len(QUIZ_PRESETS))
     for col, preset in zip(qcols, QUIZ_PRESETS):
-        n = min(preset["n"], len(items))
+        pool_n = len(left) if unseen else len(items)
+        n = min(preset["n"], pool_n)
+        if n <= 0:
+            col.button(f"{preset['label']}\n{preset['hint']}", width="stretch", key=f"cardquiz_{preset['n']}", disabled=True)
+            continue
         if col.button(f"{preset['label']}\n{preset['hint']}", width="stretch", key=f"cardquiz_{preset['n']}"):
-            start_quiz(n, chapter=chapter)
-            st.rerun()
+            launch_quiz(n, chapter=chapter, unseen_only=unseen)
     st.divider()
     if st.button("この章の用語集", width="stretch"):
         start_glossary(chapter)
@@ -379,12 +422,17 @@ def page_glossary() -> None:
                         st.success("弱点ノートに追加しました。")
 
     st.divider()
+    left = unanswered_terms(st.session_state.progress, chapter=ch)
+    unseen = st.checkbox(f"未解答だけ（残り{len(left)}語）", key="gloss_unseen")
     qcols = st.columns(len(QUIZ_PRESETS))
     for col, preset in zip(qcols, QUIZ_PRESETS):
-        n = min(preset["n"], len(items)) if items else preset["n"]
+        pool_n = len(left) if unseen else len(items)
+        n = min(preset["n"], pool_n) if pool_n else 0
+        if n <= 0:
+            col.button(f"{preset['label']}", width="stretch", key=f"glossquiz_{preset['n']}", disabled=True)
+            continue
         if col.button(f"{preset['label']}", width="stretch", key=f"glossquiz_{preset['n']}"):
-            start_quiz(n, chapter=ch)
-            st.rerun()
+            launch_quiz(n, chapter=ch, unseen_only=unseen)
 
 
 def page_quiz() -> None:
@@ -393,19 +441,21 @@ def page_quiz() -> None:
         st.caption("章と問題数を選ぶと、すぐ始まります。")
         chapter_names = ["すべて"] + [c for chapters_map in SYLLABUS_TREE.values() for c in chapters_map]
         chapter = st.selectbox("章", chapter_names)
+        ch = None if chapter == "すべて" else chapter
+        left = unanswered_terms(st.session_state.progress, chapter=ch)
+        unseen = st.checkbox(f"未解答だけ（残り{len(left)}語）", key="solo_unseen")
         cols = st.columns(len(QUIZ_PRESETS))
         for col, preset in zip(cols, QUIZ_PRESETS):
             if col.button(f"{preset['label']}\n{preset['hint']}", type="primary", width="stretch", key=f"solo_{preset['n']}"):
-                ch = None if chapter == "すべて" else chapter
-                start_quiz(preset["n"], chapter=ch)
-                st.rerun()
+                launch_quiz(preset["n"], chapter=ch, unseen_only=unseen)
         return
 
     quiz = st.session_state.quiz
     idx = st.session_state.q_idx
     total = len(quiz)
     where = st.session_state.quiz_chapter or "全範囲"
-    st.caption(f"{where}　／　{total}問")
+    unseen_note = "　／　未解答のみ" if st.session_state.get("quiz_unseen") else ""
+    st.caption(f"{where}　／　{total}問{unseen_note}")
     st.progress(1.0 if st.session_state.q_done else idx / total, text=f"{min(idx + 1, total)} / {total}")
 
     if st.session_state.q_done:
@@ -430,15 +480,24 @@ def page_quiz() -> None:
             st.session_state.nav = "学習履歴"
             st.rerun()
         again = st.columns(len(QUIZ_PRESETS))
+        unseen = bool(st.session_state.get("quiz_unseen"))
         for col, preset in zip(again, QUIZ_PRESETS):
             if col.button(f"もう{preset['label']}", width="stretch", key=f"again_{preset['n']}"):
-                start_quiz(
-                    preset["n"],
-                    chapter=st.session_state.quiz_chapter,
-                    field=st.session_state.quiz_field,
-                    terms=st.session_state.quiz_terms,
-                )
-                st.rerun()
+                if unseen:
+                    launch_quiz(
+                        preset["n"],
+                        chapter=st.session_state.quiz_chapter,
+                        field=st.session_state.quiz_field,
+                        unseen_only=True,
+                    )
+                else:
+                    start_quiz(
+                        preset["n"],
+                        chapter=st.session_state.quiz_chapter,
+                        field=st.session_state.quiz_field,
+                        terms=st.session_state.quiz_terms,
+                    )
+                    st.rerun()
         if st.button("章一覧へ", width="stretch"):
             st.session_state.quiz = []
             st.session_state.nav = "章から学ぶ"
