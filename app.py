@@ -506,7 +506,7 @@ def page_quiz() -> None:
 
     q = quiz[idx]
     st.subheader(f"Q{idx + 1}")
-    st.write(q["stem"])
+    st.markdown(q["stem"].replace("\n", "  \n"))
     choice = st.radio("選択肢", q["options"], key=f"choice_{idx}_{q['term']}")
 
     if st.session_state.last_result is None:

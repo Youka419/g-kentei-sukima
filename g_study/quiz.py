@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 from typing import Any
 
+from .exam_questions import filter_exam_questions
 from .terms import all_terms, filter_terms
 
 QUIZ_PRESETS = [
@@ -45,7 +46,16 @@ def make_question(pool: list[dict] | None = None) -> dict[str, Any]:
         "stem": stem,
         "options": options,
         "answer": item["term"],
+        "kind": "term",
     }
+
+
+def _prepare_exam(q: dict) -> dict:
+    options = list(q["options"])
+    random.shuffle(options)
+    out = dict(q)
+    out["options"] = options
+    return out
 
 
 def make_quiz(
@@ -64,15 +74,32 @@ def make_quiz(
         pool = filter_terms(field=field, chapter=chapter)
         if len(pool) < 2:
             pool = all_terms()
-    count = min(max(1, n), len(pool))
-    used: set[str] = set()
+    exam = filter_exam_questions(
+        chapter=None if explicit else chapter,
+        field=None if explicit else field,
+        terms=list(wanted) if explicit else None,
+    )
+    count = min(max(1, n), max(len(pool), len(exam), 1))
+    used_stems: set[str] = set()
+    used_terms: set[str] = set()
     questions = []
+    random.shuffle(exam)
+    for q in exam:
+        if len(questions) >= count:
+            break
+        if q["stem"] in used_stems:
+            continue
+        used_stems.add(q["stem"])
+        used_terms.add(q["term"])
+        questions.append(_prepare_exam(q))
     guard = 0
     while len(questions) < count and guard < count * 12:
         q = make_question(pool)
         guard += 1
-        if q["term"] in used:
+        if q["term"] in used_terms or q["stem"] in used_stems:
             continue
-        used.add(q["term"])
+        used_terms.add(q["term"])
+        used_stems.add(q["stem"])
         questions.append(q)
+    random.shuffle(questions)
     return questions
