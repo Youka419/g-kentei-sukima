@@ -67,6 +67,75 @@ def load_progress_bytes(raw: bytes) -> dict:
     return _normalize(json.loads(raw.decode("utf-8")))
 
 
+def _row_key(row: dict, kind: str) -> tuple:
+    return (
+        kind,
+        str(row.get("at") or ""),
+        str(row.get("term") or row.get("chapter") or ""),
+        str(row.get("correct") if "correct" in row else row.get("known") if "known" in row else ""),
+        str(row.get("n") or ""),
+        str(row.get("answered") or ""),
+    )
+
+
+def _dedupe(rows: list[dict], kind: str, limit: int) -> list[dict]:
+    seen: set[tuple] = set()
+    out: list[dict] = []
+    for row in sorted(rows, key=lambda r: str(r.get("at") or "")):
+        key = _row_key(row, kind)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out[-limit:]
+
+
+def merge_progress(*parts: dict) -> dict:
+    """複数の履歴JSONを上書きせず合体する。"""
+    known: set[str] = set()
+    unknown: set[str] = set()
+    answered: set[str] = set()
+    misses: Counter[str] = Counter()
+    history: list[dict] = []
+    sessions: list[dict] = []
+    cards: list[dict] = []
+    answered_n = 0
+    correct_n = 0
+    updated = ""
+    for raw in parts:
+        data = _normalize(raw or {})
+        known.update(str(x) for x in (data.get("known") or []) if str(x))
+        unknown.update(str(x) for x in (data.get("unknown") or []) if str(x))
+        answered.update(str(x) for x in (data.get("answered_terms") or []) if str(x))
+        for term, n in (data.get("misses") or {}).items():
+            misses[str(term)] = max(misses[str(term)], int(n))
+        quiz = data.get("quiz") or {}
+        answered_n = max(answered_n, int(quiz.get("answered") or 0))
+        correct_n = max(correct_n, int(quiz.get("correct") or 0))
+        history.extend(quiz.get("history") or [])
+        sessions.extend(data.get("sessions") or [])
+        cards.extend(data.get("card_history") or [])
+        stamp = str(data.get("updated") or "")
+        if stamp > updated:
+            updated = stamp
+    history = _dedupe(history, "quiz", 400)
+    sessions = _dedupe(sessions, "session", 100)
+    cards = _dedupe(cards, "card", 300)
+    answered_n = max(answered_n, len(history))
+    correct_n = max(correct_n, sum(1 for row in history if row.get("correct")))
+    unknown -= known
+    out = _empty()
+    out["known"] = sorted(known)
+    out["unknown"] = sorted(unknown)
+    out["answered_terms"] = sorted(answered)
+    out["misses"] = {k: int(v) for k, v in misses.items() if int(v) > 0}
+    out["quiz"] = {"answered": answered_n, "correct": correct_n, "history": history}
+    out["sessions"] = sessions
+    out["card_history"] = cards
+    out["updated"] = updated
+    return _normalize(out)
+
+
 def progress_bytes(data: dict) -> bytes:
     payload = _normalize(data)
     payload["updated"] = datetime.now().isoformat(timespec="seconds")

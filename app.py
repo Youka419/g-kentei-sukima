@@ -13,6 +13,7 @@ from g_study.cheatsheet import (
     save_both,
     word_bytes,
 )
+from g_study.browser_store import load_browser_progress, save_browser_progress
 from g_study.config import EXCEL_PATH, OFFICIAL_URL, SYLLABUS_URL, TICKET_URL, WORD_PATH
 from g_study.exam import EXAM_OVERVIEW, FEES, NEXT_ONLINE, NEXT_ONSITE_NOTE, NOTES_2026, SCHEDULE_2026, SYLLABUS_TREE
 from g_study.progress import (
@@ -20,6 +21,7 @@ from g_study.progress import (
     daily_quiz_counts,
     load_progress,
     load_progress_bytes,
+    merge_progress,
     miss_counts,
     progress_bytes,
     record_card,
@@ -66,9 +68,30 @@ st.markdown(
 )
 
 
+def _restore_browser_progress() -> None:
+    if not st.session_state.get("_need_ls_merge"):
+        return
+    raw = load_browser_progress()
+    if raw is None:
+        return
+    st.session_state._need_ls_merge = False
+    if not str(raw).strip():
+        return
+    try:
+        st.session_state.progress = merge_progress(
+            st.session_state.progress,
+            load_progress_bytes(str(raw).encode("utf-8")),
+        )
+        persist_progress()
+    except Exception:
+        pass
+
+
 def _init_state() -> None:
     if "progress" not in st.session_state:
         st.session_state.progress = load_progress()
+        st.session_state._need_ls_merge = True
+    _restore_browser_progress()
     if "sheet" not in st.session_state:
         st.session_state.sheet = load_excel()
     if "quiz" not in st.session_state:
@@ -99,6 +122,60 @@ def persist_sheet(df: pd.DataFrame) -> None:
 
 def persist_progress() -> None:
     save_progress(st.session_state.progress)
+    save_browser_progress(progress_bytes(st.session_state.progress).decode("utf-8"))
+
+
+def apply_history_files(files) -> int:
+    parts = [st.session_state.progress]
+    loaded = 0
+    for item in files:
+        try:
+            parts.append(load_progress_bytes(item.getvalue()))
+            loaded += 1
+        except Exception:
+            continue
+    if loaded:
+        st.session_state.progress = merge_progress(*parts)
+        persist_progress()
+    return loaded
+
+
+def history_backup_box(key: str) -> None:
+    p = st.session_state.progress
+    updated = p.get("updated") or "未保存"
+    st.caption(f"最終更新　{updated}")
+    if is_cloud():
+        st.info(
+            "公開版のサーバーには履歴が残りません。同じスマホ・同じブラウザなら自動で残します。"
+            "機種変更や履歴削除の前に、下のJSONを1つ保存してください。"
+        )
+    else:
+        st.caption("この端末のブラウザにも自動保存します。複数のJSONは上書きせず合体します。")
+    b1, b2 = st.columns(2)
+    b1.download_button(
+        "履歴JSONを保存",
+        data=progress_bytes(p),
+        file_name="G検定_学習履歴.json",
+        mime="application/json",
+        width="stretch",
+        key=f"dl_hist_{key}",
+    )
+    uploaded = b2.file_uploader(
+        "JSONをまとめて復元",
+        type=["json"],
+        accept_multiple_files=True,
+        key=f"up_hist_{key}",
+    )
+    if uploaded:
+        marker = "|".join(f"{f.name}:{f.size}" for f in uploaded)
+        if st.session_state.get(f"_hist_loaded_{key}") != marker:
+            n = apply_history_files(uploaded)
+            st.session_state[f"_hist_loaded_{key}"] = marker
+            if n:
+                st.success(f"{n}件のJSONを合体して復元しました。")
+                st.rerun()
+            else:
+                st.warning("読み込める履歴JSONがありませんでした。")
 
 
 def chapter_count(chapter: str) -> int:
@@ -199,6 +276,7 @@ def page_chapters() -> None:
     if st.button("学習履歴を見る", type="primary", width="stretch"):
         start_history()
         st.rerun()
+    history_backup_box("home")
     stats_map = {r["章"]: r for r in chapter_stats(st.session_state.progress)}
 
     st.subheader("弱点だけ解く")
@@ -642,23 +720,7 @@ def page_history() -> None:
         st.caption("まだ履歴がありません。章クイズかカードを進めると、ここに溜まります。")
 
     st.subheader("履歴の保存")
-    u1, u2 = st.columns(2)
-    u1.download_button(
-        "履歴JSONを保存",
-        data=progress_bytes(p),
-        file_name="G検定_学習履歴.json",
-        mime="application/json",
-        width="stretch",
-    )
-    uploaded = u2.file_uploader("履歴JSONを読み込む", type=["json"])
-    if uploaded is not None:
-        marker = f"{uploaded.name}:{uploaded.size}"
-        if st.session_state.get("_hist_loaded") != marker:
-            st.session_state.progress = load_progress_bytes(uploaded.getvalue())
-            persist_progress()
-            st.session_state._hist_loaded = marker
-            st.success("学習履歴を読み込みました。")
-            st.rerun()
+    history_backup_box("history")
 
 
 def page_sheet() -> None:
