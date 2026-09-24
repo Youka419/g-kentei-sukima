@@ -14,6 +14,7 @@ from g_study.cheatsheet import (
     word_bytes,
 )
 from g_study.browser_store import load_browser_progress, save_browser_progress
+from g_study.cloud_sync import create_sync, normalize_sync_id, pull_sync, push_sync
 from g_study.config import EXCEL_PATH, OFFICIAL_URL, SYLLABUS_URL, TICKET_URL, WORD_PATH
 from g_study.exam import EXAM_OVERVIEW, FEES, NEXT_ONLINE, NEXT_ONSITE_NOTE, NOTES_2026, SCHEDULE_2026, SYLLABUS_TREE
 from g_study.progress import (
@@ -82,9 +83,51 @@ def _restore_browser_progress() -> None:
             st.session_state.progress,
             load_progress_bytes(str(raw).encode("utf-8")),
         )
-        persist_progress()
+        persist_progress(push_cloud=False)
     except Exception:
         pass
+
+
+def _flush_cloud() -> None:
+    if not st.session_state.get("_cloud_dirty"):
+        return
+    sync_id = normalize_sync_id(str(st.session_state.progress.get("sync_id") or ""))
+    if not sync_id or not st.session_state.progress.get("sync_edit"):
+        return
+    try:
+        st.session_state.progress = push_sync(st.session_state.progress)
+        save_progress(st.session_state.progress)
+        save_browser_progress(progress_bytes(st.session_state.progress).decode("utf-8"))
+        st.session_state._cloud_dirty = False
+        st.session_state._cloud_error = ""
+    except Exception:
+        st.session_state._cloud_error = "クラウドへの保存に失敗しました。この端末には残っています。"
+
+
+def _pull_cloud_once() -> None:
+    if st.session_state.get("_cloud_pulled"):
+        return
+    if st.session_state.get("_need_ls_merge"):
+        return
+    sync_id = normalize_sync_id(str(st.session_state.progress.get("sync_id") or ""))
+    if not sync_id:
+        st.session_state._cloud_pulled = True
+        return
+    try:
+        remote = pull_sync(sync_id)
+    except Exception:
+        st.session_state._cloud_pulled = True
+        st.session_state._cloud_error = "クラウドの取り込みに失敗しました。この端末の履歴はそのまま使えます。"
+        return
+    st.session_state._cloud_pulled = True
+    if not remote:
+        return
+    remote["sync_id"] = sync_id
+    if remote.get("sync_edit"):
+        st.session_state.progress["sync_edit"] = remote["sync_edit"]
+    st.session_state.progress = merge_progress(st.session_state.progress, remote)
+    st.session_state.progress["sync_id"] = sync_id
+    persist_progress(push_cloud=True)
 
 
 def _init_state() -> None:
@@ -92,6 +135,7 @@ def _init_state() -> None:
         st.session_state.progress = load_progress()
         st.session_state._need_ls_merge = True
     _restore_browser_progress()
+    _pull_cloud_once()
     if "sheet" not in st.session_state:
         st.session_state.sheet = load_excel()
     if "quiz" not in st.session_state:
@@ -120,9 +164,13 @@ def persist_sheet(df: pd.DataFrame) -> None:
     save_both(df)
 
 
-def persist_progress() -> None:
+def persist_progress(push_cloud: bool = False) -> None:
     save_progress(st.session_state.progress)
     save_browser_progress(progress_bytes(st.session_state.progress).decode("utf-8"))
+    if st.session_state.progress.get("sync_id") and st.session_state.progress.get("sync_edit"):
+        st.session_state._cloud_dirty = True
+    if push_cloud:
+        _flush_cloud()
 
 
 def apply_history_files(files) -> int:
@@ -136,21 +184,58 @@ def apply_history_files(files) -> int:
             continue
     if loaded:
         st.session_state.progress = merge_progress(*parts)
-        persist_progress()
+        persist_progress(push_cloud=True)
     return loaded
 
 
 def history_backup_box(key: str) -> None:
+    _flush_cloud()
     p = st.session_state.progress
     updated = p.get("updated") or "未保存"
     st.caption(f"最終更新　{updated}")
-    if is_cloud():
-        st.info(
-            "公開版のサーバーには履歴が残りません。同じスマホ・同じブラウザなら自動で残します。"
-            "機種変更や履歴削除の前に、下のJSONを1つ保存してください。"
-        )
+    st.subheader("どの端末でも同じ履歴")
+    if err := st.session_state.get("_cloud_error"):
+        st.warning(err)
+    sync_id = normalize_sync_id(str(p.get("sync_id") or ""))
+    if sync_id:
+        st.success("パソコンとスマホで、下のコードを同じにしてください。")
+        st.code(sync_id, language=None)
+        st.caption("他人には教えないでください。長く使わないときは、下のJSONも保存しておくと安心です。")
+        if st.button("今すぐ他の端末へ送る", width="stretch", key=f"sync_now_{key}"):
+            persist_progress(push_cloud=True)
+            st.rerun()
     else:
-        st.caption("この端末のブラウザにも自動保存します。複数のJSONは上書きせず合体します。")
+        st.info("一度コードを発行すれば、別の端末でそのコードを入力するだけで履歴がつながります。")
+        if st.button("引き継ぎコードを発行", type="primary", width="stretch", key=f"sync_new_{key}"):
+            try:
+                st.session_state.progress = create_sync(st.session_state.progress)
+                persist_progress(push_cloud=False)
+                st.session_state._cloud_pulled = True
+                st.rerun()
+            except Exception:
+                st.error("コードを発行できませんでした。通信環境を確かめて、もう一度試してください。")
+    entered = st.text_input("別の端末のコード", key=f"sync_in_{key}", placeholder="gkからはじまるコード")
+    if st.button("このコードでつなぐ", width="stretch", key=f"sync_bind_{key}"):
+        code = normalize_sync_id(entered)
+        if not code:
+            st.warning("コードを入力してください。")
+        else:
+            try:
+                remote = pull_sync(code)
+                if not remote:
+                    st.error("そのコードの履歴が見つかりませんでした。")
+                else:
+                    merged = merge_progress(st.session_state.progress, remote)
+                    merged["sync_id"] = code
+                    merged["sync_edit"] = remote.get("sync_edit") or merged.get("sync_edit") or ""
+                    st.session_state.progress = merged
+                    persist_progress(push_cloud=True)
+                    st.session_state._cloud_pulled = True
+                    st.success("この端末の履歴をつなぎました。")
+                    st.rerun()
+            except Exception:
+                st.error("クラウドからの読み込みに失敗しました。")
+    st.caption("予備：JSONファイル")
     b1, b2 = st.columns(2)
     b1.download_button(
         "履歴JSONを保存",
@@ -545,7 +630,7 @@ def page_quiz() -> None:
                 st.session_state.session_answered,
                 st.session_state.session_correct,
             )
-            persist_progress()
+            persist_progress(push_cloud=True)
             st.session_state.session_recorded = True
         hist = st.session_state.progress["quiz"]
         sess_a = st.session_state.session_answered
@@ -671,8 +756,8 @@ def page_history() -> None:
 
     if p.get("updated"):
         st.caption(f"最終更新: {p['updated']}　／　カード既知 {known_n}語")
-    if is_cloud():
-        st.info("公開版は再起動で消えることがあります。下のJSONを保存しておくと、学習履歴を戻せます。")
+    if is_cloud() and not normalize_sync_id(str(p.get("sync_id") or "")):
+        st.info("引き継ぎコードを発行すると、パソコンとスマホで同じ履歴になります。")
 
     daily = daily_quiz_counts(p)
     if daily:

@@ -20,6 +20,8 @@ def _empty() -> dict:
         "misses": {},
         "answered_terms": [],
         "updated": "",
+        "sync_id": "",
+        "sync_edit": "",
     }
 
 
@@ -60,6 +62,8 @@ def _normalize(data: dict) -> dict:
         if term:
             answered.add(term)
     base["answered_terms"] = sorted(answered)
+    base["sync_id"] = str(base.get("sync_id") or "").strip()
+    base["sync_edit"] = str(base.get("sync_edit") or "").strip()
     return base
 
 
@@ -102,6 +106,8 @@ def merge_progress(*parts: dict) -> dict:
     answered_n = 0
     correct_n = 0
     updated = ""
+    sync_id = ""
+    sync_edit = ""
     for raw in parts:
         data = _normalize(raw or {})
         known.update(str(x) for x in (data.get("known") or []) if str(x))
@@ -118,6 +124,11 @@ def merge_progress(*parts: dict) -> dict:
         stamp = str(data.get("updated") or "")
         if stamp > updated:
             updated = stamp
+        if not sync_id and data.get("sync_id"):
+            sync_id = str(data.get("sync_id") or "")
+            sync_edit = str(data.get("sync_edit") or "")
+        elif data.get("sync_id") == sync_id and data.get("sync_edit"):
+            sync_edit = str(data.get("sync_edit") or sync_edit)
     history = _dedupe(history, "quiz", 400)
     sessions = _dedupe(sessions, "session", 100)
     cards = _dedupe(cards, "card", 300)
@@ -133,6 +144,8 @@ def merge_progress(*parts: dict) -> dict:
     out["sessions"] = sessions
     out["card_history"] = cards
     out["updated"] = updated
+    out["sync_id"] = sync_id
+    out["sync_edit"] = sync_edit
     return _normalize(out)
 
 
